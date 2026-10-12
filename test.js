@@ -109,140 +109,42 @@ async function main() {
 
     const graph = runtime.getSceneGraph(stagePath);
 
-
     const result = runtime.getPrimAttributes(
       stagePath,
       "/World/Cube"
     );
-
-    // output.textContent =
-    //   "=== CUBE ATTRIBUTES ===\n" +
-    //   JSON.stringify(result, null, 2);
-
-    // status.textContent = "Attribute test completed.";
-
 
     const transforms = runtime.extractTransformsAtTime(stagePath, 0);
 
     console.log("Transforms:", transforms);
     console.log("Return type:", typeof transforms);
 
+    const relationships = runtime.inspectPrimRelationships(
+      stagePath,
+      "/World/Cube"
+    );
+
+    console.log("Relationships:", relationships);
+    console.log("Return type:", typeof relationships);
+
     output.textContent =
       "=== CUBE ATTRIBUTES ===\n" +
-      JSON.stringify(result, null, 2) + "\n" +
+      JSON.stringify(result, null, 2) + "\n";
 
+    output.textContent +=
+      "=== CUBE RELATIONSHIPS ===\n" +
+      (relationships === undefined
+        ? "Returned undefined"
+        : JSON.stringify(relationships, null, 2)) + "\n";
 
+    output.textContent +=
       "=== TRANSFORMS AT TIME 0 ===\n" +
       (transforms === undefined
         ? "Returned undefined"
         : JSON.stringify(transforms, null, 2));
 
-    status.textContent = "Transform and Attribute test completed.";
+    status.textContent = "Tests completed.";
 
-
-
-    // const relationships = runtime.inspectPrimRelationships(
-    //   stagePath,
-    //   "/World/Cube"
-    // );
-
-    // console.log("Relationships:", relationships);
-    // console.log("Return type:", typeof relationships);
-
-    // output.textContent =
-    //   "=== CUBE RELATIONSHIPS ===\n" +
-    //   (relationships === undefined
-    //     ? "Returned undefined"
-    //     : JSON.stringify(relationships, null, 2));
-
-    // status.textContent = "Relationship test completed.";
-
-
-    
-
-    // const rawEnvironment = module.ExtractStageEnvironment(stagePath);
-
-    // console.log("Raw return:", rawEnvironment);
-    // console.log("Return type:", typeof rawEnvironment);
-    // console.log("Is undefined:", rawEnvironment === undefined);
-    // console.log("Is null:", rawEnvironment === null);
-
-
-    // const stageEnvironment = runtime.extractStageEnvironment(stagePath);
-
-    // output.textContent = [
-    //   "=== STAGE ENVIRONMENT ===",
-    //   print(stageEnvironment)
-    // ].join("\n");
-
-    // status.textContent = "SUCCESS — Stage environment returned.";
-
-    // console.log({ stageEnvironment });
-
-
-
-    // const worldAttributes = runtime.getPrimAttributes(
-    //   stagePath,
-    //   "/World"
-    // );
-
-    // output.textContent = [
-    //   "=== WORLD ATTRIBUTES ===",
-    //   print(worldAttributes)
-    // ].join("\n");
-
-    // status.textContent = "SUCCESS — World attributes returned.";
-
-    // console.log({ worldAttributes });
-
-
-
-    // status.textContent = "Inspecting USD prim attributes…";
-
-    // const cubeAttributes = runtime.getPrimAttributes(stagePath, "/World/Cube");
-
-    // const worldAttributes = runtime.getPrimAttributes(stagePath, "/World");
-
-    // const stageEnvironment = runtime.extractStageEnvironment(stagePath);
-
-    // const cubeRelationships = runtime.inspectPrimRelationships(stagePath, "/World/Cube");
-
-    // output.textContent = [
-    //   "=== SCENE GRAPH ===",
-    //   print(graph),
-    //   "",
-    //   "=== CUBE ATTRIBUTES ===",
-    //   print(cubeAttributes),
-    //   "",
-    //   "=== WORLD ATTRIBUTES ===",
-    //   print(worldAttributes),
-    //   "",
-    //   "=== STAGE ENVIRONMENT ===",
-    //   print(stageEnvironment),
-    //   "",
-    //   "=== CUBE RELATIONSHIPS ===",
-    //   print(cubeRelationships)
-    // ].join("\n");
-
-    // status.textContent =
-    //   "SUCCESS — Stage and prim inspection completed.";
-
-    // console.log({
-    //   graph,
-    //   cubeAttributes,
-    //   worldAttributes,
-    //   stageEnvironment,
-    //   cubeRelationships
-    // });
-
-/******/
-
-  //   output.textContent =
-  //     "openStage() result:\n" + print(opened) +
-  //     "\n\ngetSceneGraph() result:\n" + print(graph);
-
-  //   status.textContent =
-  //     "SUCCESS — Runtime initialized and stage inspection returned.";
   } catch (error) {
     status.textContent = "FAILED — See error details below.";
     output.textContent =
