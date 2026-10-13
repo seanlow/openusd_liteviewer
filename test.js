@@ -17,41 +17,6 @@ window.addEventListener("unhandledrejection", (event) => {
   );
 });
 
-const sampleUsd = `#usda 1.0
-(
-    defaultPrim = "World"
-    upAxis = "Y"
-    metersPerUnit = 1
-)
-
-def Xform "World"
-{
-    def Cube "Cube"
-    {
-        double size = 2
-        color3f[] primvars:displayColor = [(0.2, 0.6, 0.9)]
-
-        double3 xformOp:translate = (3, 2, 1)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-    }
-}
-
-def Mesh "TransformProbe"
-{
-    point3f[] points = [
-        (-1, 0, 0),
-        (1, 0, 0),
-        (0, 1, 0)
-    ]
-    int[] faceVertexCounts = [3]
-    int[] faceVertexIndices = [0, 1, 2]
-
-    double3 xformOp:translate = (3, 2, 1)
-    uniform token[] xformOpOrder = ["xformOp:translate"]
-}
-
-`;
 
 function print(value) {
   if (typeof value === "string") {
@@ -71,7 +36,7 @@ function print(value) {
 
 async function main() {
   try {
-    status.textContent = "1/3 — Initializing OpenUSD WASM…";
+    status.textContent = "Initializing OpenUSD WASM…";
 
     const runtime =
       await window.UsdWebViewBindings.createRuntime({
@@ -85,65 +50,126 @@ async function main() {
     await runtime.ready;
 
     const module = window.__USD_WEBVIEW_MODULE__;
-
-    console.log("ExtractStageEnvironment export:", typeof module.ExtractStageEnvironment);
-    console.log("Module exports matching Environment:",
-      Object.keys(module).filter(k => k.toLowerCase().includes("environment"))
+      
+    const response = await fetch(
+      "./assets/feature-test.usda?v=2"
     );
 
-
-    status.textContent = "2/3 — Opening test stage…";
-
-    const stagePath = "/smoke-test.usda";
-    const bytes = new TextEncoder().encode(sampleUsd);
-
-    runtime.createDataFile(stagePath, bytes);
-
-    const opened = runtime.openStage(stagePath, true);
-
-    if (opened === false) {
-      throw new Error("OpenUSD reported that the stage failed to open.");
+    if (!response.ok) {
+      throw new Error(`Asset fetch failed: HTTP ${response.status}`);
     }
 
-    status.textContent = "3/3 — Reading parsed scene graph…";
+    
+    const sourceText = (await response.text()).replace(/^\uFEFF/, "").trimStart();
 
-    const graph = runtime.getSceneGraph(stagePath);
+    console.log("First line:", sourceText.split(/\r?\n/, 1)[0]);
+    console.log("Starts with #usda:", sourceText.startsWith("#usda 1.0"));
 
-    const result = runtime.getPrimAttributes(
-      stagePath,
-      "/World/Cube"
+    if (!sourceText.startsWith("#usda 1.0")) {
+      throw new Error("Fetched asset does not start with #usda 1.0");
+    }
+
+    const featureBytes = new TextEncoder().encode(sourceText);   
+    const usdpath = "/feature-test.usda";
+    runtime.createDataFile(usdpath, featureBytes);
+
+    function test(name, fn) {
+      try {
+        console.log(name, fn());
+      } catch (e) {
+        console.log(name, "ERROR:", e.message);
+      }
+    }
+
+    function attrs(path) {
+      return runtime.getPrimAttributes(usdpath, path).map(a => ({
+        name: a.name,
+        authored: a.isAuthored,
+        value: a.value
+      })).filter(a => a.authored || a.name.startsWith("inputs:"));
+    }
+
+    test("STAGE", () => {
+      const s = runtime.openStage(usdpath);
+      return s && {
+        prims: s.primCount,
+        meshes: s.meshPrimCount,
+        start: s.startTimeCode,
+        end: s.endTimeCode,
+        fps: s.timeCodesPerSecond
+      };
+    });
+
+    for (const t of [1, 12, 24]) {
+      test(`TRANSFORM t=${t}`, () =>
+        runtime.extractTransformsAtTime(usdpath, t).map(x => ({
+          path: x.path,
+          translation: [x.matrix[12], x.matrix[13], x.matrix[14]]
+        }))
+      );
+    }
+
+    test("LIGHT INPUTS", () =>
+      attrs("/World/ModernLight").filter(a =>
+        ["inputs:color", "inputs:intensity", "inputs:exposure",
+        "color", "intensity"].includes(a.name)
+      )
     );
 
-    const transforms = runtime.extractTransformsAtTime(stagePath, 0);
-
-    console.log("Transforms:", transforms);
-    console.log("Return type:", typeof transforms);
-
-    const relationships = runtime.inspectPrimRelationships(
-      stagePath,
-      "/World/Cube"
+    test("LIGHT EXTRACTION", () =>
+      runtime.extractStageLights(usdpath, 12).map(l => ({
+        path: l.path,
+        color: l.color,
+        intensity: l.intensity,
+        exposure: l.exposure
+      }))
     );
 
-    console.log("Relationships:", relationships);
-    console.log("Return type:", typeof relationships);
+    test("ENVIRONMENT", () => {
+      const result = runtime.extractStageEnvironment(usdpath);
+      return result ?? "undefined";
+    });
+
+    test("SHADER INPUTS", () =>
+      attrs("/World/Looks/TestMaterial/PreviewSurface")
+    );
+
+    test("MATERIAL EXTRACTION", () =>
+      runtime.extractMaterialPayloads(usdpath).map(m => ({
+        path: m.path,
+        roughness: m.roughness,
+        metallic: m.metallic,
+        opacity: m.opacity
+      }))
+    );
 
     output.textContent =
-      "=== CUBE ATTRIBUTES ===\n" +
-      JSON.stringify(result, null, 2) + "\n";
+      "=== MATERIAL ATTRIBUTES ===\n" +
+      (runtime === undefined
+        ? "Returned undefined"
+        : JSON.stringify(runtime.getPrimAttributes(usdpath, "/World/Looks/TestMaterial", null, 2)) + "\n");
 
     output.textContent +=
-      "=== CUBE RELATIONSHIPS ===\n" +
-      (relationships === undefined
+      "=== SHADER RELATIONSHIPS ===\n" +
+      (runtime === undefined
         ? "Returned undefined"
-        : JSON.stringify(relationships, null, 2)) + "\n";
+        : JSON.stringify(runtime.getPrimAttributes(usdpath, "/World/Looks/TestMaterial/PreviewSurface", null, 2)));
 
-    output.textContent +=
-      "=== TRANSFORMS AT TIME 0 ===\n" +
-      (transforms === undefined
-        ? "Returned undefined"
-        : JSON.stringify(transforms, null, 2));
+    console.log(
+    "MATERIAL ATTRIBUTES",
+    runtime.getPrimAttributes(
+      usdpath,
+      "/World/Looks/TestMaterial"
+    )
+    );
 
-    status.textContent = "Tests completed.";
+    console.log(
+    "SHADER ATTRIBUTES",
+    runtime.getPrimAttributes(
+      usdpath,
+      "/World/Looks/TestMaterial/PreviewSurface"
+    )
+    );
 
   } catch (error) {
     status.textContent = "FAILED — See error details below.";
