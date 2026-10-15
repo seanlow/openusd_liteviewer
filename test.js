@@ -7,348 +7,616 @@ const output = document.querySelector("#output");
 const viewport = document.querySelector("#viewport");
 
 async function main() {
-  try {
-    if (!viewport || !status || !output) {
-      throw new Error(
-        "Required HTML elements missing: #viewport, #status, or #output."
-      );
+  if (!status || !output || !viewport) {
+    throw new Error("Missing #status, #output, or #viewport in index.html");
+  }
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x202630);
+
+  const camera = new THREE.PerspectiveCamera(
+    45,
+    Math.max(viewport.clientWidth, 1) /
+      Math.max(viewport.clientHeight, 1),
+    0.1,
+    1000
+  );
+
+  // Preserve the established USD stage framing.
+  const cameraTarget = new THREE.Vector3(5, 6, 7);
+  camera.position.set(25, 20, 47);
+  camera.lookAt(cameraTarget);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  viewport.replaceChildren(renderer.domElement);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 1.8));
+
+  const keyLight = new THREE.DirectionalLight(0xffffff, 2);
+  keyLight.position.set(5, 8, 10);
+  scene.add(keyLight);
+
+  // ------------------------------------------------------------
+  // Embedded default example: a real 3D cube, created in JavaScript.
+  // It does not require a USD file or a network request.
+  // ------------------------------------------------------------
+
+  const embeddedCubeGeometry = new THREE.BoxGeometry(2, 2, 2);
+  const embeddedCubeMaterial = new THREE.MeshStandardMaterial({
+    color: 0x3388ee,
+    roughness: 0.4,
+    metalness: 0.1
+  });
+
+  const embeddedCube = new THREE.Mesh(
+    embeddedCubeGeometry,
+    embeddedCubeMaterial
+  );
+
+  embeddedCube.name = "Embedded JavaScript Cube";
+  embeddedCube.position.copy(cameraTarget);
+  scene.add(embeddedCube);
+
+  const axes = new THREE.AxesHelper(3);
+  axes.position.copy(cameraTarget);
+  scene.add(axes);
+
+  let runtime = null;
+  let activeStagePath = null;
+  let activeStageStart = 1;
+  let activeStageEnd = 1;
+  let stageObjects = [];
+  let loadSequence = 0;
+
+  function render() {
+    renderer.render(scene, camera);
+  }
+
+  // ------------------------------------------------------------
+  // UI: file picker and optional bundled USDZ sample.
+  // File selection remains active after every load.
+  // ------------------------------------------------------------
+
+  const controls = document.createElement("div");
+  controls.style.cssText =
+    "display:flex;flex-wrap:wrap;align-items:center;gap:10px;" +
+    "margin:8px 0;font:14px sans-serif;color:inherit;";
+
+  const fileLabel = document.createElement("label");
+  fileLabel.textContent = "Open USD file: ";
+
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".usd,.usda,.usdc,.usdz";
+  fileInput.setAttribute("aria-label", "Choose USD, USDA, USDC, or USDZ");
+
+  const bundledButton = document.createElement("button");
+  bundledButton.type = "button";
+  bundledButton.textContent = "Load sample1.usdz";
+
+  const resetButton = document.createElement("button");
+  resetButton.type = "button";
+  resetButton.textContent = "Show embedded cube";
+
+  const fileHelp = document.createElement("span");
+  fileHelp.textContent = "The embedded cube is available by default.";
+  fileHelp.style.opacity = "0.75";
+
+  fileLabel.appendChild(fileInput);
+  controls.append(fileLabel, bundledButton, resetButton, fileHelp);
+  status.parentElement.insertBefore(controls, status.nextSibling);
+
+  // Timeline UI.
+  const timeline = document.createElement("div");
+  timeline.style.cssText =
+    "display:flex;align-items:center;gap:12px;" +
+    "margin:8px 0;font:14px sans-serif;color:inherit;";
+
+  const timeLabel = document.createElement("label");
+  timeLabel.textContent = "USD Time";
+  timeLabel.htmlFor = "usd-time-slider";
+
+  const timeSlider = document.createElement("input");
+  timeSlider.id = "usd-time-slider";
+  timeSlider.type = "range";
+  timeSlider.min = "1";
+  timeSlider.max = "1";
+  timeSlider.step = "1";
+  timeSlider.value = "1";
+  timeSlider.style.cssText = "flex:1;min-width:120px;";
+
+  const timeReadout = document.createElement("output");
+  timeReadout.textContent = "Embedded cube";
+  timeReadout.style.minWidth = "130px";
+
+  timeline.append(timeLabel, timeSlider, timeReadout);
+  controls.after(timeline);
+
+  function setTimeline(start, end, isUsd) {
+    activeStageStart = start;
+    activeStageEnd = end;
+
+    timeSlider.min = String(start);
+    timeSlider.max = String(Math.max(start, end));
+    timeSlider.value = String(start);
+    timeSlider.disabled = !isUsd || start === end;
+
+    timeReadout.textContent = isUsd
+      ? `Time: ${start} / ${end}`
+      : "Embedded cube";
+  }
+
+  function showEmbeddedCube() {
+    for (const object of stageObjects) {
+      scene.remove(object);
+      object.geometry?.dispose();
+      if (object.material) {
+        if (Array.isArray(object.material)) {
+          object.material.forEach(material => material.dispose());
+        } else {
+          object.material.dispose();
+        }
+      }
     }
 
-    status.textContent = "Initializing OpenUSD WASM…";
+    stageObjects = [];
+    embeddedCube.visible = true;
+    axes.visible = true;
+    activeStagePath = null;
 
-    const runtime =
-      await window.UsdWebViewBindings.createRuntime({
-        locateFile: path =>
-          new URL(
-            `./usd-webview-bindings/${path}`,
-            import.meta.url
-          ).href
-      });
+    setTimeline(1, 1, false);
 
-    await runtime.ready;
+    status.textContent = "Ready — embedded 3D cube.";
+    output.textContent = JSON.stringify({
+      example: "Embedded JavaScript cube",
+      externalFilesRequired: false,
+      controls: "Drag to orbit; wheel to zoom; right/middle drag to pan"
+    }, null, 2);
 
-    // Load the USD fixture.
-    const fixtureUrl = "./assets/feature-test.usda";
-    const stagePath = "/feature-test.usda";
+    render();
+  }
 
-    status.textContent = "Loading feature-test.usda…";
+  // ------------------------------------------------------------
+  // Camera interaction.
+  // Left drag = orbit. Right/middle drag = pan. Wheel = zoom.
+  // ------------------------------------------------------------
 
-    const response = await fetch(`${fixtureUrl}?v=${Date.now()}`);
+  const canvas = renderer.domElement;
+  canvas.style.touchAction = "none";
+  canvas.style.cursor = "grab";
 
-    if (!response.ok) {
-      throw new Error(
-        `Failed to load ${fixtureUrl}: HTTP ${response.status}`
-      );
-    }
+  const drag = {
+    pointerId: null,
+    action: null,
+    x: 0,
+    y: 0
+  };
 
-    const fixtureText = (await response.text())
-      .replace(/^\uFEFF/, "")
-      .trimStart();
+  const offset = new THREE.Vector3();
+  const spherical = new THREE.Spherical();
+  const right = new THREE.Vector3();
+  const up = new THREE.Vector3();
+  const pan = new THREE.Vector3();
 
-    if (!fixtureText.startsWith("#usda 1.0")) {
-      throw new Error(
-        "Fetched asset does not start with #usda 1.0"
-      );
-    }
+  function renderCamera() {
+    camera.lookAt(cameraTarget);
+    camera.updateMatrixWorld();
+    render();
+  }
 
-    console.log("FIXTURE URL:", response.url);
-    console.log(
-      "FIXTURE CONTENT TYPE:",
-      response.headers.get("content-type")
-    );
-    console.log("FIXTURE LENGTH:", fixtureText.length);
-    console.log(
-      "FIXTURE HEADER:",
-      JSON.stringify(fixtureText.slice(0, 160))
-    );
-
-    // Use the wrapper's supported VFS method.
-    runtime.createDataFile(stagePath, fixtureText);
-
-    const opened = runtime.openStage(stagePath, true);
-
-    if (opened === false) {
-      throw new Error(`Failed to open stage: ${stagePath}`);
-    }
-
-    const prims = runtime.getSceneGraph(stagePath);
-    console.log("V4 STAGE PRIMS", prims);
-
-    // Initialize the rendering scene.
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x202630);
-
-    const camera = new THREE.PerspectiveCamera(
-      45,
-      Math.max(viewport.clientWidth, 1) /
-        Math.max(viewport.clientHeight, 1),
+  function orbit(dx, dy) {
+    offset.copy(camera.position).sub(cameraTarget);
+    spherical.setFromVector3(offset);
+    spherical.theta -= dx * 0.005;
+    spherical.phi -= dy * 0.005;
+    spherical.phi = THREE.MathUtils.clamp(
+      spherical.phi,
       0.01,
+      Math.PI - 0.01
+    );
+    spherical.makeSafe();
+
+    offset.setFromSpherical(spherical);
+    camera.position.copy(cameraTarget).add(offset);
+    renderCamera();
+  }
+
+  function zoom(deltaY) {
+    offset.copy(camera.position).sub(cameraTarget);
+    const distance = THREE.MathUtils.clamp(
+      offset.length() * Math.exp(deltaY * 0.001),
+      0.1,
       10000
     );
+    offset.setLength(distance);
+    camera.position.copy(cameraTarget).add(offset);
+    renderCamera();
+  }
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true
+  function panCamera(dx, dy) {
+    camera.updateMatrixWorld();
+
+    const distance = camera.position.distanceTo(cameraTarget);
+    const viewHeight =
+      2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    const scale = viewHeight / Math.max(canvas.clientHeight, 1);
+
+    right.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+    up.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+
+    pan.copy(right)
+      .multiplyScalar(-dx * scale)
+      .addScaledVector(up, dy * scale);
+
+    camera.position.add(pan);
+    cameraTarget.add(pan);
+    renderCamera();
+  }
+
+  canvas.addEventListener("contextmenu", event => event.preventDefault());
+
+  canvas.addEventListener("pointerdown", event => {
+    if (event.button === 0) drag.action = "orbit";
+    else if (event.button === 1 || event.button === 2) drag.action = "pan";
+    else return;
+
+    drag.pointerId = event.pointerId;
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    canvas.style.cursor = drag.action === "orbit" ? "grabbing" : "move";
+
+    canvas.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+
+  canvas.addEventListener("pointermove", event => {
+    if (event.pointerId !== drag.pointerId || !drag.action) return;
+
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+
+    if (drag.action === "orbit") orbit(dx, dy);
+    else panCamera(dx, dy);
+
+    event.preventDefault();
+  });
+
+  function endDrag(event) {
+    if (event.pointerId !== drag.pointerId) return;
+
+    drag.pointerId = null;
+    drag.action = null;
+    canvas.style.cursor = "grab";
+
+    if (canvas.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
+  canvas.addEventListener("wheel", event => {
+    event.preventDefault();
+    zoom(event.deltaY);
+  }, { passive: false });
+
+  function resize() {
+    const width = Math.max(viewport.clientWidth, 1);
+    const height = Math.max(viewport.clientHeight, 1);
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    render();
+  }
+
+  const resizeObserver = new ResizeObserver(resize);
+  resizeObserver.observe(viewport);
+
+  // The cube appears immediately, even before WASM has initialized.
+  showEmbeddedCube();
+
+  // ------------------------------------------------------------
+  // Initialize the existing OpenUSD WASM wrapper.
+  // ------------------------------------------------------------
+
+  status.textContent = "Initializing OpenUSD runtime…";
+
+  try {
+    runtime = await window.UsdWebViewBindings.createRuntime({
+      locateFile: path =>
+        new URL(
+          `./usd-webview-bindings/${path}`,
+          import.meta.url
+        ).href
     });
 
-    renderer.setPixelRatio(
-      Math.min(window.devicePixelRatio, 2)
-    );
+    await runtime.ready;
+    status.textContent = "Ready — embedded cube. Choose a USD file to load.";
+  } catch (error) {
+    status.textContent =
+      "Embedded cube ready; OpenUSD runtime failed to initialize.";
+    output.textContent = error?.stack || String(error);
+    console.error(error);
+    return;
+  }
 
-    viewport.replaceChildren(renderer.domElement);
+  // ------------------------------------------------------------
+  // Reusable USD stage loader.
+  // A new selection invokes this function every time.
+  // ------------------------------------------------------------
 
-    scene.add(new THREE.AmbientLight(0xffffff, 1.8));
+  async function loadUsdFile(file, isBundled = false) {
+    const thisLoad = ++loadSequence;
+    const extension = isBundled
+      ? "usdz"
+      : file.name.split(".").pop().toLowerCase();
 
-    const light = new THREE.DirectionalLight(0xffffff, 2);
-    light.position.set(5, 8, 10);
-    scene.add(light);
-
-    const previewMaterial = new THREE.MeshStandardMaterial({
-      color: 0x3399dd,
-      roughness: 0.65,
-      metalness: 0,
-      side: THREE.DoubleSide
-    });
-
-    // Create the OpenUSD stage driver.
-    const driverCreated = runtime.createStageDriver(stagePath);
-
-    if (!driverCreated) {
-      throw new Error("Could not create the v4 stage driver.");
+    if (!["usd", "usda", "usdc", "usdz"].includes(extension)) {
+      status.textContent = "Unsupported file type.";
+      return;
     }
 
-    const drawResult = runtime.stageDriverDraw(
-      stagePath,
-      true
-    );
+    let stagePath = `/viewer-stage-${thisLoad}.${extension}`;
 
-    const meshes = drawResult?.meshes ?? [];
+    try {
+      status.textContent = `Reading ${isBundled ? "sample1.usdz" : file.name}…`;
 
-    console.log("V4 DRAW RESULT", drawResult);
+      let bytes;
 
-    if (meshes.length === 0) {
-      throw new Error(
-        "The v4 stage driver returned zero meshes."
-      );
-    }
+      if (isBundled) {
+        const response = await fetch("./assets/sample1.usdz");
 
-    // Store the actual Three.js objects created below.
-    const renderedObjects = [];
+        if (!response.ok) {
+          throw new Error(
+            `Failed to load bundled sample: HTTP ${response.status}`
+          );
+        }
 
-    function updateUsdTime(timeCode) {
-      runtime.stageDriverSetTime(stagePath, timeCode);
+        bytes = new Uint8Array(await response.arrayBuffer());
+      } else {
+        bytes = new Uint8Array(await file.arrayBuffer());
+      }
 
-      const result = runtime.stageDriverDraw(
+      if (thisLoad !== loadSequence) return;
+
+      let usdaText = null;
+
+      if (extension === "usda") {
+        usdaText = new TextDecoder("utf-8")
+          .decode(bytes)
+          .replace(/^\uFEFF/, "")
+          .trimStart();
+
+        if (!usdaText.startsWith("#usda 1.0")) {
+          throw new Error("The selected USDA file has an invalid header.");
+        }
+      }
+
+      status.textContent = `Opening ${isBundled ? "sample1.usdz" : file.name}…`;
+
+      // USDA is text. USDC/USDZ remain binary.
+      runtime.createDataFile(
         stagePath,
-        true
+        usdaText !== null ? usdaText : bytes
       );
 
-      const usdMeshes = result?.meshes ?? [];
+      const opened = runtime.openStage(stagePath, true);
 
-      for (const usdMesh of usdMeshes) {
-        const threeMesh = renderedObjects.find(
-          object => object.userData.usdPath === usdMesh.path
+      if (opened === false) {
+        throw new Error(`The wrapper could not open ${stagePath}`);
+      }
+
+      const prims = runtime.getSceneGraph(stagePath) ?? [];
+
+      const driver = runtime.createStageDriver(stagePath);
+
+      if (!driver) {
+        throw new Error("Could not create the USD stage driver.");
+      }
+
+      const drawResult = runtime.stageDriverDraw(stagePath, true);
+      const meshes = drawResult?.meshes ?? [];
+
+      if (thisLoad !== loadSequence) return;
+
+      if (meshes.length === 0) {
+        throw new Error(
+          "The stage opened, but the renderer returned no meshes."
         );
+      }
 
-        if (!threeMesh) {
+      const newObjects = [];
+
+      for (const data of meshes) {
+        if (!data.positions || data.positions.length < 9) {
+          console.warn("Skipping mesh without usable positions:", data.path);
           continue;
         }
 
-        if (
-          Array.isArray(usdMesh.matrix) &&
-          usdMesh.matrix.length === 16
-        ) {
-          threeMesh.matrixAutoUpdate = false;
-          threeMesh.matrix.fromArray(usdMesh.matrix);
-          threeMesh.matrixWorldNeedsUpdate = true;
-        }
-      }
+        const geometry = new THREE.BufferGeometry();
 
-      renderer.render(scene, camera);
-
-      const animated = usdMeshes.find(
-        mesh => mesh.path === "/World/AnimatedTriangle"
-      );
-
-      console.log("Displayed USD time:", timeCode, {
-        translation: animated?.matrix?.slice(12, 15) ?? null
-      });
-    }
-
-    // Convert the USD mesh payloads into Three.js meshes.
-    for (const data of meshes) {
-      if (!data.positions || data.positions.length < 9) {
-        console.warn(
-          "Skipping mesh with no usable positions:",
-          data.path
-        );
-        continue;
-      }
-
-      const geometry = new THREE.BufferGeometry();
-
-      geometry.setAttribute(
-        "position",
-        new THREE.BufferAttribute(data.positions, 3)
-      );
-
-      if (data.normals?.length === data.positions.length) {
         geometry.setAttribute(
-          "normal",
-          new THREE.BufferAttribute(data.normals, 3)
+          "position",
+          new THREE.BufferAttribute(data.positions, 3)
         );
-      } else {
-        geometry.computeVertexNormals();
+
+        if (data.normals?.length === data.positions.length) {
+          geometry.setAttribute(
+            "normal",
+            new THREE.BufferAttribute(data.normals, 3)
+          );
+        } else {
+          geometry.computeVertexNormals();
+        }
+
+        const material = new THREE.MeshStandardMaterial({
+          color: 0x8eb9e8,
+          roughness: 0.55,
+          metalness: 0.05,
+          side: THREE.DoubleSide
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = data.name ?? data.path ?? "USD Mesh";
+        mesh.userData.usdPath = data.path ?? null;
+
+        if (Array.isArray(data.matrix) && data.matrix.length === 16) {
+          mesh.matrix.fromArray(data.matrix);
+          mesh.matrixAutoUpdate = false;
+        }
+
+        newObjects.push(mesh);
       }
 
-      const object = new THREE.Mesh(
-        geometry,
-        previewMaterial
+      if (newObjects.length === 0) {
+        throw new Error("No renderable mesh geometry was found in the stage.");
+      }
+
+      if (thisLoad !== loadSequence) {
+        for (const object of newObjects) {
+          object.geometry.dispose();
+          object.material.dispose();
+        }
+        return;
+      }
+
+      // Replace the displayed stage only after the new stage renders.
+      for (const object of stageObjects) {
+        scene.remove(object);
+        object.geometry?.dispose();
+        object.material?.dispose();
+      }
+
+      stageObjects = newObjects;
+      for (const object of stageObjects) scene.add(object);
+
+      embeddedCube.visible = false;
+      axes.visible = false;
+      activeStagePath = stagePath;
+
+      // Parse timeline metadata only when the selected file is USDA text.
+      const startMatch = usdaText?.match(
+        /\bstartTimeCode\s*=\s*(-?\d+(?:\.\d+)?)/
+      );
+      const endMatch = usdaText?.match(
+        /\bendTimeCode\s*=\s*(-?\d+(?:\.\d+)?)/
       );
 
-      object.name = data.name ?? data.path;
-      object.userData.usdPath = data.path;
-      object.userData.materialPath =
-        data.materialPath ?? null;
+      const start = startMatch ? Number(startMatch[1]) : 1;
+      const end = endMatch ? Number(endMatch[1]) : 1;
+      const validRange =
+        Number.isFinite(start) &&
+        Number.isFinite(end) &&
+        end >= start;
 
-      if (data.matrix?.length === 16) {
-        object.matrix.fromArray(data.matrix);
-        object.matrixAutoUpdate = false;
-      }
+      setTimeline(
+        validRange ? start : 1,
+        validRange ? end : 1,
+        true
+      );
 
-      scene.add(object);
-      renderedObjects.push(object);
-    }
+      status.textContent =
+        `Loaded ${isBundled ? "sample1.usdz" : file.name} — ` +
+        `${prims.length} prims, ${stageObjects.length} mesh(es)`;
 
-    if (renderedObjects.length === 0) {
-      throw new Error("No usable mesh objects were created.");
-    }
-
-   
-    // Keep the camera fixed around the full animation range.
-    // The fixture's translation moves from (1, 2, 3)
-    // at frame 1 to (9, 10, 11) at frame 24.
-    const center = new THREE.Vector3(5, 6, 7);
-    const distance = 40;
-
-    camera.position.set(
-      center.x + distance * 0.5,
-      center.y + distance * 0.35,
-      center.z + distance
-    );
-
-    camera.near = 0.1;
-    camera.far = 1000;
-    camera.lookAt(center);
-    camera.updateProjectionMatrix();
-
-
-    // Add a timeline slider for the fixture's time range.
-    const timeline = document.createElement("div");
-    timeline.id = "usd-timeline";
-    timeline.style.cssText =
-      "display:flex;align-items:center;gap:12px;" +
-      "margin:8px 0;font:14px sans-serif;color:inherit;";
-
-    const timeLabel = document.createElement("label");
-    timeLabel.htmlFor = "usd-time-slider";
-    timeLabel.textContent = "USD Time";
-
-    const timeSlider = document.createElement("input");
-    timeSlider.id = "usd-time-slider";
-    timeSlider.type = "range";
-    timeSlider.min = "1";
-    timeSlider.max = "24";
-    timeSlider.step = "1";
-    timeSlider.value = "1";
-    timeSlider.style.cssText = "flex:1;min-width:120px;";
-
-    const timeReadout = document.createElement("output");
-    timeReadout.id = "usd-time-readout";
-    timeReadout.textContent = "Time: 1 / 24";
-    timeReadout.style.minWidth = "100px";
-
-    timeline.append(
-      timeLabel,
-      timeSlider,
-      timeReadout
-    );
-
-    viewport.parentElement.insertBefore(
-      timeline,
-      viewport
-    );
-
-    timeSlider.addEventListener("input", () => {
-      const timeCode = Number(timeSlider.value);
-
-      timeReadout.textContent =
-        `Time: ${timeCode} / 24`;
-
-      updateUsdTime(timeCode);
-    });
-
-    // Keep the renderer fitted to the viewport.
-    function resizeViewport() {
-      const width = Math.max(viewport.clientWidth, 1);
-      const height = Math.max(viewport.clientHeight, 1);
-
-      renderer.setSize(width, height, false);
-
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-
-      renderer.render(scene, camera);
-    }
-
-    const resizeObserver = new ResizeObserver(
-      resizeViewport
-    );
-
-    resizeObserver.observe(viewport);
-
-    resizeViewport();
-
-    // Initialize the displayed USD time after meshes exist.
-    updateUsdTime(1);
-
-    output.textContent = JSON.stringify(
-      {
-        fixture: fixtureUrl,
+      output.textContent = JSON.stringify({
+        source: isBundled ? "./assets/sample1.usdz" : file.name,
         stagePath,
         primCount: prims.length,
-        driverCreated,
-        meshCount: meshes.length,
-        renderedObjectCount: renderedObjects.length,
+        meshCount: stageObjects.length,
+        timeline: {
+          start: validRange ? start : 1,
+          end: validRange ? end : 1,
+          note: usdaText
+            ? "Parsed from USDA metadata when present"
+            : "Binary stage: default single-frame range"
+        },
         meshes: meshes.map(mesh => ({
           path: mesh.path,
           name: mesh.name,
           vertexCount: mesh.positions?.length / 3,
-          normalCount: mesh.normals?.length / 3,
-          hasMatrix: mesh.matrix?.length === 16,
-          materialPath: mesh.materialPath ?? null
+          hasMatrix: mesh.matrix?.length === 16
         }))
-      },
-      null,
-      2
-    );
+      }, null, 2);
 
-    status.textContent =
-      `V4 stage rendered — ${prims.length} prims, ` +
-      `${renderedObjects.length} mesh(es)`;
+      render();
 
-    console.log(
-      "V4 RENDER SUMMARY",
-      output.textContent
-    );
-  } catch (error) {
-    status.textContent =
-      "FAILED — See error details below.";
+      console.log("Loaded USD stage:", {
+        stagePath,
+        primCount: prims.length,
+        meshes
+      });
+    } catch (error) {
+      // Keep the current scene visible if a new file fails to load.
+      if (thisLoad === loadSequence) {
+        status.textContent =
+          `Could not load ${isBundled ? "sample1.usdz" : file.name}.`;
+        output.textContent = error?.stack || String(error);
+      }
 
-    output.textContent =
-      error?.stack || String(error);
-
-    console.error(error);
+      console.error("USD stage loading failed:", error);
+    }
   }
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+
+    await loadUsdFile(file, false);
+
+    // Let the user select the same file again if needed.
+    fileInput.value = "";
+  });
+
+  bundledButton.addEventListener("click", async () => {
+    await loadUsdFile(null, true);
+  });
+
+  resetButton.addEventListener("click", showEmbeddedCube);
+
+  timeSlider.addEventListener("input", () => {
+    const timeCode = Number(timeSlider.value);
+
+    if (!activeStagePath) return;
+
+    try {
+      runtime.stageDriverSetTime(activeStagePath, timeCode);
+
+      const result = runtime.stageDriverDraw(activeStagePath, true);
+      const meshes = result?.meshes ?? [];
+
+      for (const data of meshes) {
+        const object = stageObjects.find(
+          item => item.userData.usdPath === data.path
+        );
+
+        if (!object) continue;
+
+        if (Array.isArray(data.matrix) && data.matrix.length === 16) {
+          object.matrixAutoUpdate = false;
+          object.matrix.fromArray(data.matrix);
+          object.matrixWorldNeedsUpdate = true;
+        }
+      }
+
+      timeReadout.textContent =
+        `Time: ${timeCode} / ${activeStageEnd}`;
+
+      render();
+    } catch (error) {
+      console.error("Could not update USD time:", error);
+    }
+  });
+
+  resize();
 }
 
-main();
+main().catch(error => {
+  console.error(error);
+  if (status) status.textContent = "Viewer initialization failed.";
+  if (output) output.textContent = error?.stack || String(error);
+});
