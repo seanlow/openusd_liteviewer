@@ -5,10 +5,12 @@ import * as THREE from
 const status = document.querySelector("#status");
 const output = document.querySelector("#output");
 const viewport = document.querySelector("#viewport");
+const hierarchy = document.querySelector("#hierarchy");
+const primDetails = document.querySelector("#prim-details");
 
 async function main() {
-  if (!status || !output || !viewport) {
-    throw new Error("Missing #status, #output, or #viewport in index.html");
+  if (!status || !output || !viewport || !hierarchy || !primDetails) {
+    throw new Error("Missing required viewer UI elements in index.html");
   }
 
   const scene = new THREE.Scene();
@@ -67,6 +69,9 @@ async function main() {
   let activeStageStart = 1;
   let activeStageEnd = 1;
   let stageObjects = [];
+  let activePrims = [];
+  let selectedPrimPath = null;
+  let selectedMesh = null;
   let loadSequence = 0;
 
   function render() {
@@ -147,6 +152,84 @@ async function main() {
       : "Embedded cube";
   }
 
+  function renderHierarchy(prims, stagePath = null) {
+    hierarchy.replaceChildren();
+    activePrims = Array.isArray(prims) ? prims : [];
+
+    if (!activePrims.length) {
+      const empty = document.createElement("div");
+      empty.textContent = stagePath ? "No prim hierarchy was returned." : "/World/Cube (embedded example)";
+      hierarchy.appendChild(empty);
+      selectedPrimPath = null;
+      selectedMesh = null;
+      primDetails.textContent = stagePath
+        ? "No prim details available."
+        : JSON.stringify({ path: "/World/Cube", type: "Cube", source: "Embedded JavaScript example" }, null, 2);
+      return;
+    }
+
+    for (const prim of activePrims) {
+      const path = prim.path ?? prim.primPath ?? prim.name ?? String(prim);
+      const type = prim.typeName ?? prim.type ?? prim.primType ?? "Prim";
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "prim-row";
+      row.dataset.primPath = path;
+      row.setAttribute("aria-pressed", "false");
+
+      const pathLabel = document.createElement("span");
+      pathLabel.textContent = path;
+      const typeLabel = document.createElement("span");
+      typeLabel.className = "prim-type";
+      typeLabel.textContent = type;
+      row.append(pathLabel, typeLabel);
+      row.addEventListener("click", () => selectPrim(path, stagePath));
+      hierarchy.appendChild(row);
+    }
+
+    selectedPrimPath = null;
+    selectedMesh = null;
+    primDetails.textContent = "Select a prim to inspect its attributes and highlight matching geometry.";
+  }
+
+  function selectPrim(path, stagePath) {
+    selectedPrimPath = path;
+    for (const row of hierarchy.querySelectorAll(".prim-row")) {
+      row.setAttribute("aria-pressed", String(row.dataset.primPath === path));
+    }
+
+    selectedMesh = stageObjects.find(object => object.userData.usdPath === path) ?? null;
+    for (const object of stageObjects) {
+      const material = object.material;
+      if (!material || Array.isArray(material)) continue;
+      if (object.userData.baseColor === undefined) {
+        object.userData.baseColor = material.color.getHex();
+      }
+      material.color.setHex(object === selectedMesh ? 0xffc857 : object.userData.baseColor);
+      material.emissive?.setHex(object === selectedMesh ? 0x4a2b00 : 0x000000);
+    }
+
+    let attributes = null;
+    try {
+      if (stagePath && typeof runtime?.getPrimAttributes === "function") {
+        attributes = runtime.getPrimAttributes(stagePath, path) ?? [];
+      }
+    } catch (error) {
+      attributes = { inspectionError: error?.message ?? String(error) };
+    }
+
+    const prim = activePrims.find(item =>
+      (item.path ?? item.primPath ?? item.name ?? String(item)) === path
+    );
+    primDetails.textContent = JSON.stringify({
+      path,
+      type: prim?.typeName ?? prim?.type ?? prim?.primType ?? "Unknown",
+      renderedInViewport: Boolean(selectedMesh),
+      attributes: attributes ?? "Attribute inspection is unavailable for this prim."
+    }, null, 2);
+    render();
+  }
+
   function showEmbeddedCube() {
     for (const object of stageObjects) {
       scene.remove(object);
@@ -161,6 +244,7 @@ async function main() {
     }
 
     stageObjects = [];
+    renderHierarchy([], null);
     embeddedCube.visible = true;
     axes.visible = true;
     activeStagePath = null;
@@ -463,6 +547,7 @@ async function main() {
         const mesh = new THREE.Mesh(geometry, material);
         mesh.name = data.name ?? data.path ?? "USD Mesh";
         mesh.userData.usdPath = data.path ?? null;
+        mesh.userData.baseColor = mesh.material.color.getHex();
 
         if (Array.isArray(data.matrix) && data.matrix.length === 16) {
           mesh.matrix.fromArray(data.matrix);
@@ -493,6 +578,7 @@ async function main() {
 
       stageObjects = newObjects;
       for (const object of stageObjects) scene.add(object);
+      renderHierarchy(prims, stagePath);
 
       embeddedCube.visible = false;
       axes.visible = false;
